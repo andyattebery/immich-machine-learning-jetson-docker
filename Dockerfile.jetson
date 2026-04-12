@@ -1,0 +1,82 @@
+# Dockerfile for running Immich ML on NVIDIA Jetson (Orin Nano, etc.)
+#
+# Do not build directly. Use the Makefile:
+#   make build              # uses latest immich release
+#   make build IMMICH_VERSION=v2.7.4
+#
+# This Dockerfile is invoked with the immich machine-learning directory
+# as its build context (see Makefile `image` target).
+
+ARG ONNXRUNTIME_BASE_IMAGE
+FROM ${ONNXRUNTIME_BASE_IMAGE} AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv
+
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.8.15@sha256:a5727064a0de127bdb7c9d3c1383f3a9ac307d9f2d8a391edc7896c54289ced0 /uv /uvx /bin/
+
+# Install base Python dependencies (without onnxruntime extras, since ORT is in the base image)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --no-dev --no-editable --no-install-project --compile-bytecode --no-progress --active --link-mode copy
+
+# Copy onnxruntime-gpu from the base image's system site-packages into the venv
+RUN ORT_SRC=$(python3 -c "import onnxruntime; print(onnxruntime.__path__[0])") && \
+    ORT_DIST=$(python3 -c "import importlib.metadata; dist=importlib.metadata.distribution('onnxruntime-gpu'); print(dist._path)") && \
+    VENV_SITE=$(/opt/venv/bin/python3 -c "import site; print(site.getsitepackages()[0])") && \
+    cp -r "$ORT_SRC" "$VENV_SITE/" && \
+    cp -r "$ORT_DIST" "$VENV_SITE/"
+
+FROM ${ONNXRUNTIME_BASE_IMAGE} AS prod
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tini ccache libgl1 libglib2.0-0 libgomp1 && \
+    apt-get autoremove -yqq && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src
+
+ENV TRANSFORMERS_CACHE=/cache \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONPATH=/usr/src \
+    DEVICE=cuda \
+    VIRTUAL_ENV=/opt/venv \
+    MACHINE_LEARNING_CACHE_FOLDER=/cache \
+    MACHINE_LEARNING_MODEL_ARENA=false
+
+# Prevent core dumps
+RUN echo "hard core 0" >> /etc/security/limits.conf && \
+    echo "fs.suid_dumpable 0" >> /etc/sysctl.conf && \
+    echo 'ulimit -S -c 0 > /dev/null 2>&1' >> /etc/profile
+
+COPY --from=builder /opt/venv /opt/venv
+COPY scripts/healthcheck.py .
+COPY immich_ml immich_ml
+
+ARG BUILD_ID
+ARG BUILD_IMAGE
+ARG BUILD_SOURCE_REF
+ARG BUILD_SOURCE_COMMIT
+
+ENV IMMICH_BUILD=${BUILD_ID}
+ENV IMMICH_BUILD_URL=https://github.com/immich-app/immich/actions/runs/${BUILD_ID}
+ENV IMMICH_BUILD_IMAGE=${BUILD_IMAGE}
+ENV IMMICH_BUILD_IMAGE_URL=https://github.com/immich-app/immich/pkgs/container/immich-machine-learning
+ENV IMMICH_REPOSITORY=immich-app/immich
+ENV IMMICH_REPOSITORY_URL=https://github.com/immich-app/immich
+ENV IMMICH_SOURCE_REF=${BUILD_SOURCE_REF}
+ENV IMMICH_SOURCE_COMMIT=${BUILD_SOURCE_COMMIT}
+ENV IMMICH_SOURCE_URL=https://github.com/immich-app/immich/commit/${BUILD_SOURCE_COMMIT}
+
+ENTRYPOINT ["tini", "--"]
+CMD ["python", "-m", "immich_ml"]
+
+HEALTHCHECK CMD python3 healthcheck.py

@@ -1,0 +1,17 @@
+services:
+  immich-machine-learning:
+    container_name: immich-machine-learning
+    image: immich-machine-learning:jetson
+    volumes:
+      - ${MACHINE_LEARNING_CACHE_DIR}:/cache
+    restart: unless-stopped
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - ${ML_PORT:-3003}:3003
