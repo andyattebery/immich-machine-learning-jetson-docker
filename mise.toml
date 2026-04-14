@@ -1,0 +1,6 @@
+[tools]
+python = '3'
+
+[settings.python]
+uv_venv_auto = false
+compile = true

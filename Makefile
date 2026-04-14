@@ -5,7 +5,7 @@
 #   make build IMMICH_VERSION=v2.7.4    # pin a specific version
 #   make up                              # start the service
 #   make down                            # stop the service
-#   make clean                           # remove src/ and built images
+#   make clean                           # remove src/, jetson-containers/, and the ML image
 
 IMMICH_VERSION      ?= latest
 IMMICH_REPO         ?= https://github.com/immich-app/immich.git
@@ -25,20 +25,59 @@ ONNXRUNTIME_VERSION ?= $(shell [ -f $(IMMICH_SRC)/machine-learning/pyproject.tom
 	| grep -oE '>=[0-9]+\.[0-9]+\.[0-9]+' \
 	| head -1 | sed 's/>=//')
 
-ORT_IMAGE ?= onnxruntime-jetson:$(ONNXRUNTIME_VERSION)
+ORT_PYTHON_VERSION     ?= 3.11
+ORT_IMAGE              ?= onnxruntime-jetson:$(ONNXRUNTIME_VERSION)-py$(subst .,,$(ORT_PYTHON_VERSION))
+CUDASTACK_IMAGE        ?= onnxruntime-cudastack-jetson:$(ONNXRUNTIME_VERSION)-py$(subst .,,$(ORT_PYTHON_VERSION))
 
-.PHONY: build resolve-version checkout detect-ort-version ort-base image up down clean help \
+JETSON_CONTAINERS_REPO  ?= https://github.com/dusty-nv/jetson-containers
+JETSON_CONTAINERS_FLAGS  ?= --skip-tests all
+JETSON_CONTAINERS_DIR  ?= jetson-containers
+JETSON_VENV            := $(JETSON_CONTAINERS_DIR)/venv
+SWAP_FILE              ?= /mnt/16GB.swap
+SWAP_SIZE              ?= 16G
+# Use mise-managed Python if available, otherwise fall back to system python3
+PYTHON                 := $(if $(shell command -v mise 2>/dev/null),mise exec -- python,python3)
+
+# Put the repo dir on PATH so the `jetson-containers` shell script is found by all recipes
+export PATH := $(CURDIR)/$(JETSON_CONTAINERS_DIR):$(PATH)
+
+.DEFAULT_GOAL := help
+
+.PHONY: build resolve-version checkout detect-ort-version ort-base image up down clean clean-all help \
+        setup-host jetson-venv \
         test test-local test-jetson \
         test-makefile test-github-api test-ort-detect test-compose test-dockerfile test-env-example \
         test-ort-base test-venv-ort test-service test-rebuild
 
+$(JETSON_VENV)/.done:
+	@if [ ! -d $(JETSON_CONTAINERS_DIR)/.git ]; then \
+		echo "==> Cloning jetson-containers..."; \
+		git clone --depth 1 $(JETSON_CONTAINERS_REPO) $(JETSON_CONTAINERS_DIR); \
+	fi
+	@echo "==> Creating jetson-containers venv at $(JETSON_VENV) using $(PYTHON)..."
+	@if [ "$(PYTHON)" = "python3" ] && ! python3 -m venv --help >/dev/null 2>&1; then \
+		echo "==> Installing python3-venv (required for system Python venv creation)..."; \
+		sudo apt-get install -y python3-venv; \
+	fi
+	@$(PYTHON) -m venv $(JETSON_VENV)
+	@$(JETSON_VENV)/bin/pip install --upgrade pip --quiet
+	@$(JETSON_VENV)/bin/pip install -r $(JETSON_CONTAINERS_DIR)/requirements.txt
+	@touch $@
+
+jetson-venv: $(JETSON_VENV)/.done
+	@echo "==> jetson-containers venv ready at $(JETSON_VENV)"
+
 help:
 	@echo "Targets:"
-	@echo "  build    - full pipeline: checkout immich + build ORT base + build ML image"
-	@echo "  ort-base - build ORT base image only (skips if already exists)"
-	@echo "  up       - start the ML service via docker compose"
-	@echo "  down     - stop the ML service"
-	@echo "  clean    - remove src/ and built images"
+	@echo "  setup-host   - one-time Jetson host setup: nvidia Docker runtime + swap (requires sudo)"
+	@echo "  build        - full pipeline: checkout immich + build ORT base + build ML image"
+	@echo "  image        - build ML image only (skips ORT build; useful for iteration)"
+	@echo "  jetson-venv  - clone jetson-containers and set up its Python venv"
+	@echo "  ort-base     - build ORT base image only (skips if already exists)"
+	@echo "  up           - start the ML service via docker compose"
+	@echo "  down         - stop the ML service"
+	@echo "  clean        - remove src/, jetson-containers/, and the ML image (preserves ORT image)"
+	@echo "  clean-all    - clean + remove the ORT base image (full reset; ORT rebuild takes hours)"
 	@echo "  test         - auto: runs test-local (+ test-jetson if on Jetson)"
 	@echo "  test-local   - Tier 1 static checks (runs anywhere)"
 	@echo "  test-jetson  - Tier 2 integration tests (Jetson only; requires 'make build')"
@@ -48,6 +87,61 @@ help:
 	@echo "  ONNXRUNTIME_VERSION = $(ONNXRUNTIME_VERSION)"
 	@echo "  ORT_IMAGE           = $(ORT_IMAGE)"
 	@echo "  ML_IMAGE            = $(ML_IMAGE)"
+
+# ---- One-time host setup (requires sudo) ----
+# Sets the two prerequisites documented at https://github.com/dusty-nv/jetson-containers/blob/master/docs/setup.md
+# before jetson-containers build will succeed:
+#   1. nvidia default Docker runtime  (needed so NVCC/GPU are available during docker build)
+#   2. 16 GB swap file                (needed so ORT CUDA compilation doesn't OOM)
+setup-host:
+	@echo "==> [1/2] Configuring Docker default runtime to nvidia..."
+	@if sudo docker info 2>/dev/null | grep -q 'Default Runtime: nvidia'; then \
+		echo "    Already set to nvidia, skipping"; \
+	else \
+		DAEMON=/etc/docker/daemon.json; \
+		if [ -f "$$DAEMON" ]; then \
+			sudo python3 -c " \
+import json, sys; \
+d = json.load(open('$$DAEMON')); \
+d.setdefault('runtimes', {})['nvidia'] = {'path': 'nvidia-container-runtime', 'runtimeArgs': []}; \
+d['default-runtime'] = 'nvidia'; \
+json.dump(d, open('$$DAEMON', 'w'), indent=4); \
+print('    Updated existing $$DAEMON') \
+"; \
+		else \
+			echo '    Creating $$DAEMON'; \
+			echo '{\n    "runtimes": {\n        "nvidia": {\n            "path": "nvidia-container-runtime",\n            "runtimeArgs": []\n        }\n    },\n    "default-runtime": "nvidia"\n}' | sudo tee $$DAEMON > /dev/null; \
+		fi; \
+		echo "    Restarting Docker..."; \
+		sudo systemctl restart docker; \
+		sudo docker info 2>/dev/null | grep 'Default Runtime'; \
+	fi
+	@echo ""
+	@echo "==> [2/2] Configuring swap ($(SWAP_SIZE) at $(SWAP_FILE))..."
+	@if swapon --show | grep -q '$(SWAP_FILE)'; then \
+		echo "    Swap file $(SWAP_FILE) already active, skipping"; \
+	else \
+		if [ ! -f $(SWAP_FILE) ]; then \
+			echo "    Disabling ZRAM..."; \
+			sudo systemctl disable nvzramconfig 2>/dev/null || true; \
+			sudo swapoff -a 2>/dev/null || true; \
+			echo "    Creating $(SWAP_SIZE) swap at $(SWAP_FILE)..."; \
+			sudo fallocate -l $(SWAP_SIZE) $(SWAP_FILE); \
+			sudo chmod 600 $(SWAP_FILE); \
+			sudo mkswap $(SWAP_FILE); \
+		fi; \
+		sudo swapon $(SWAP_FILE); \
+		echo "    Adding to /etc/fstab (idempotent)..."; \
+		grep -qF '$(SWAP_FILE)' /etc/fstab || echo '$(SWAP_FILE)  none  swap  sw  0  0' | sudo tee -a /etc/fstab > /dev/null; \
+		if ! swapon --show | grep -q '$(SWAP_FILE)'; then \
+			echo "ERROR: swap file $(SWAP_FILE) is not active after swapon"; \
+			exit 1; \
+		fi; \
+		echo "    Swap active:"; \
+		free -h | grep Swap; \
+	fi
+	@echo ""
+	@echo "==> Host setup complete. You can now run: make build"
 
 resolve-version:
 	@if [ -z "$(RESOLVED_VERSION)" ] || [ "$(RESOLVED_VERSION)" = "null" ]; then \
@@ -80,27 +174,43 @@ detect-ort-version: checkout
 	fi; \
 	echo "==> Detected onnxruntime-gpu >= $$DETECTED (will use: $(ONNXRUNTIME_VERSION))"
 
-ort-base: detect-ort-version
+ort-base: detect-ort-version jetson-venv
 	@if docker image inspect $(ORT_IMAGE) >/dev/null 2>&1; then \
 		echo "==> ORT base image '$(ORT_IMAGE)' already exists, skipping build"; \
 	else \
 		echo "==> No local ORT image '$(ORT_IMAGE)' found"; \
 		echo "==> Building ORT $(ONNXRUNTIME_VERSION) via jetson-containers..."; \
 		echo "    (This may take a long time on first build)"; \
-		jetson-containers build onnxruntime:$(ONNXRUNTIME_VERSION); \
+		jetson-containers build python:$(ORT_PYTHON_VERSION) onnxruntime:$(ONNXRUNTIME_VERSION) $(JETSON_CONTAINERS_FLAGS); \
 		echo "==> Locating built image..."; \
 		BUILT_TAG=$$(docker images --format '{{.Repository}}:{{.Tag}}' \
-			| grep 'onnxruntime' \
-			| grep '$(ONNXRUNTIME_VERSION)' \
+			| grep '^onnxruntime:' \
+			| grep -- '-onnxruntime_$(ONNXRUNTIME_VERSION)$$' \
 			| head -1); \
 		if [ -z "$$BUILT_TAG" ]; then \
-			echo "ERROR: Could not find built onnxruntime image with version $(ONNXRUNTIME_VERSION)"; \
-			echo "       Run 'docker images | grep onnxruntime' and set ORT_IMAGE manually"; \
+			echo "ERROR: Could not find final onnxruntime image (expected tag suffix: -onnxruntime_$(ONNXRUNTIME_VERSION))"; \
+			echo "       The ORT source compilation likely failed or was killed (OOM)."; \
+			echo "       Tip: add swap space before retrying (see jetson.spec.md)."; \
+			echo "       Run 'docker images | grep onnxruntime' to inspect, or set ORT_IMAGE manually."; \
 			exit 1; \
 		fi; \
 		echo "    Found: $$BUILT_TAG"; \
 		docker tag "$$BUILT_TAG" $(ORT_IMAGE); \
 		echo "==> Tagged as $(ORT_IMAGE)"; \
+	fi
+	@if docker image inspect $(CUDASTACK_IMAGE) >/dev/null 2>&1; then \
+		echo "==> Cudastack image '$(CUDASTACK_IMAGE)' already exists, skipping tag"; \
+	else \
+		CUDASTACK_TAG=$$(docker images --format '{{.Repository}}:{{.Tag}}' \
+			| grep '^onnxruntime:' \
+			| grep -- '-cudastack_standard$$' \
+			| head -1); \
+		if [ -z "$$CUDASTACK_TAG" ]; then \
+			echo "ERROR: Could not find cudastack_standard intermediate image"; \
+			exit 1; \
+		fi; \
+		docker tag "$$CUDASTACK_TAG" $(CUDASTACK_IMAGE); \
+		echo "==> Tagged prod base as $(CUDASTACK_IMAGE)"; \
 	fi
 
 image: ort-base
@@ -108,6 +218,7 @@ image: ort-base
 	docker build \
 		-f Dockerfile.jetson \
 		--build-arg ONNXRUNTIME_BASE_IMAGE=$(ORT_IMAGE) \
+		--build-arg PROD_BASE_IMAGE=$(CUDASTACK_IMAGE) \
 		--build-arg BUILD_SOURCE_REF=$(RESOLVED_VERSION) \
 		-t $(ML_IMAGE) \
 		$(IMMICH_SRC)/machine-learning/
@@ -123,7 +234,15 @@ down:
 
 clean:
 	-docker rmi $(ML_IMAGE) 2>/dev/null
-	-rm -rf src/
+	-rm -rf src/ $(JETSON_CONTAINERS_DIR)
+
+# Removes everything including all ORT base images. Use when you need a true fresh start.
+# Warning: the ORT image takes 1-2 hours to rebuild from source.
+# Matches by prefix (onnxruntime-jetson:*) so it works even when ONNXRUNTIME_VERSION
+# is empty (e.g. after clean has already removed src/).
+clean-all: clean
+	-docker images --format '{{.Repository}}:{{.Tag}}' \
+		| grep -E '^onnxruntime-(jetson|cudastack-jetson):' | xargs -r docker rmi 2>/dev/null || true
 
 # -------- Tests --------
 # Tier 1: runs anywhere, no Jetson required.

@@ -2,7 +2,35 @@
   "permissions": {
     "allow": [
       "Bash(make test:*)",
-      "Bash(make test-env-example:*)"
+      "Bash(make test-env-example:*)",
+      "Bash(docker run:*)",
+      "Bash(grep -E \"\\\\.\\(py|sh\\)$\")",
+      "WebFetch(domain:api.github.com)",
+      "Bash(find /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers/logs -name \"*.txt\" -exec grep -l \"onnxruntime-gpu\" {} \\\\;)",
+      "Bash(ls -lht /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers/logs/*/build/)",
+      "Bash(ls:*)",
+      "Bash(curl -sfL \"https://apt.jetson-ai-lab.io/jp6/cu126/onnxruntime-gpu-1.24.1.sha256\")",
+      "Bash(curl -sfL \"https://apt.jetson-ai-lab.io/jp6/cu126/onnxruntime-gpu-1.24.3.sha256\")",
+      "Bash(curl -sfL \"https://apt.jetson-ai-lab.io/jp6/cu126/onnxruntime-gpu-1.25.0.sha256\")",
+      "Bash(docker inspect:*)",
+      "Bash(python3 -c \"import json,sys; [print\\(e\\) for e in json.load\\(sys.stdin\\) if 'TAR' in e or 'URL' in e]\")",
+      "WebFetch(domain:github.com)",
+      "Bash(]\")",
+      "Bash(grep -n \"^[a-zA-Z$\\(]\")",
+      "Bash(grep -n \"^[a-zA-Z\\\\$]\" /opt/docker-compose/immich-machine-learning-jetson-docker/Makefile)",
+      "Bash(JETSON_VENV)",
+      "Bash(echo \"Default target is $\\(JETSON_VENV\\)/.done, not help\")",
+      "Bash(make jetson-venv:*)",
+      "Bash(command -v mise)",
+      "Bash(find /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers -name Dockerfile -exec grep -l \"rm -rf\" {} \\\\;)",
+      "Bash(find /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers -type f -name \"*tarpack*\" -o -type f -exec grep -l \"def tarpack\\\\|^tarpack\" {} \\\\;)",
+      "Bash(grep -r \"tarpack\" /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers/jetson_containers/*.py)",
+      "Bash(grep -l \"RUN.*rm -rf.*onnxruntime\\\\|RUN.*rm -rf.*cmake\\\\|RUN.*rm -rf.*build\" /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers/packages/ml/onnxruntime/*)",
+      "Bash(find /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers/packages -name \"build.sh\" -exec grep -l \"rm -rf.*build\\\\|rm -rf.*\\\\.git\\\\|rm -rf.*cmake\" {} \\\\;)",
+      "Bash(docker history:*)",
+      "Bash(make image:*)",
+      "Bash(docker container:*)",
+      "Bash(docker image:*)"
     ]
   }
 }
