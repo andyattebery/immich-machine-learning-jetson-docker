@@ -20,7 +20,7 @@
       "Bash(grep -n \"^[a-zA-Z\\\\$]\" /opt/docker-compose/immich-machine-learning-jetson-docker/Makefile)",
       "Bash(JETSON_VENV)",
       "Bash(echo \"Default target is $\\(JETSON_VENV\\)/.done, not help\")",
-      "Bash(make jetson-venv:*)",
+      "Bash(make build-onnxruntime:*)",
       "Bash(command -v mise)",
       "Bash(find /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers -name Dockerfile -exec grep -l \"rm -rf\" {} \\\\;)",
       "Bash(find /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers -type f -name \"*tarpack*\" -o -type f -exec grep -l \"def tarpack\\\\|^tarpack\" {} \\\\;)",
@@ -28,7 +28,7 @@
       "Bash(grep -l \"RUN.*rm -rf.*onnxruntime\\\\|RUN.*rm -rf.*cmake\\\\|RUN.*rm -rf.*build\" /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers/packages/ml/onnxruntime/*)",
       "Bash(find /opt/docker-compose/immich-machine-learning-jetson-docker/jetson-containers/packages -name \"build.sh\" -exec grep -l \"rm -rf.*build\\\\|rm -rf.*\\\\.git\\\\|rm -rf.*cmake\" {} \\\\;)",
       "Bash(docker history:*)",
-      "Bash(make image:*)",
+      "Bash(make build-immich:*)",
       "Bash(docker container:*)",
       "Bash(docker image:*)"
     ]

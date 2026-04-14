@@ -6,10 +6,10 @@ cd "$REPO_ROOT"
 
 need make
 
-# Re-run build at the currently-resolved version. The ORT base image should
-# already exist, so ort-base should hit its "already exists" short-circuit.
-out=$(make ort-base 2>&1) \
-    || { printf '%s\n' "$out" >&2; fail "$TEST_NAME" "make ort-base failed"; }
+# Re-run build at the currently-resolved version. The onnxruntime base image should
+# already exist, so build-onnxruntime should hit its "already exists" short-circuit.
+out=$(make build-onnxruntime 2>&1) \
+    || { printf '%s\n' "$out" >&2; fail "$TEST_NAME" "make build-onnxruntime failed"; }
 
 printf '%s\n' "$out" | grep -q "already exists, skipping build" \
     || fail "$TEST_NAME" "ORT base rebuild did not short-circuit (see Makefile:78-79)"

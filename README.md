@@ -31,7 +31,10 @@ immich-machine-learning-jetson-docker/
 ├── docker-compose.yaml   # runs the ML service
 ├── .env.example          # example environment variables
 ├── .gitignore
-└── jetson.spec.md        # this file
+├── README.md             # this file
+└── src/                  # cloned external repos (gitignored)
+    ├── immich/           # checked out by `make checkout`
+    └── jetson-containers/ # cloned automatically by `make build-onnxruntime`
 ```
 
 ## Architecture
@@ -46,14 +49,11 @@ immich-machine-learning-jetson-docker/
 │  2. checkout                                             │
 │     git clone --depth 1 --branch v2.7.4 immich → src/   │
 │                                                          │
-│  3. detect-ort-version                                   │
+│  3. detect-onnxruntime-version                           │
 │     parse pyproject.toml → onnxruntime-gpu>=1.23.2       │
 │                                                          │
-│  4. jetson-venv                                          │
-│     clone jetson-containers + create Python venv         │
-│                                                          │
-│  5. ort-base                                             │
-│     check local image || jetson-containers build         │
+│  4. build-onnxruntime                                    │
+│     check local image || clone jetson-containers + build │
 │     (chains python:3.11 → onnxruntime:VERSION)           │
 │     tags final image as onnxruntime-jetson:VERSION-py311 │
 │     tags cudastack intermediate as                       │
@@ -144,26 +144,25 @@ The Makefile will:
 3. Parse `pyproject.toml` to detect the required `onnxruntime-gpu` version
 4. Clone jetson-containers and set up its Python venv (skipped if already done)
 5. Check if `onnxruntime-jetson:<version>-py311` exists locally
-6. If not, compile it via `jetson-containers build python:3.11 onnxruntime:<version>` and tag the cudastack intermediate
-7. Build the Immich ML Docker image using the full ORT image as builder base and the cudastack image as prod base
+6. If not, clone jetson-containers, compile onnxruntime via `jetson-containers build python:3.11 onnxruntime:<version>`, and tag the cudastack intermediate
+7. Build the Immich ML Docker image using the full onnxruntime image as builder base and the cudastack image as prod base
 
 ### Makefile targets
 
-| Target               | Description                                                                    |
-| -------------------- | ------------------------------------------------------------------------------ |
-| `setup-host`         | One-time: nvidia Docker runtime + 16 GB swap (requires `sudo`)                 |
-| `build`              | Full pipeline: resolve → checkout → ORT → ML image                             |
-| `image`              | Build ML image only (skips ORT build; useful for iteration)                    |
-| `ort-base`           | Build ORT base image only; also tags cudastack intermediate (skips if exists)  |
-| `jetson-venv`        | Clone jetson-containers and set up its Python venv                             |
-| `up`                 | `docker compose up -d`                                                         |
-| `down`               | `docker compose down`                                                          |
-| `clean`              | Remove `src/`, `jetson-containers/`, and the ML image                          |
-| `clean-all`          | `clean` + remove all `onnxruntime-jetson:*` and `onnxruntime-cudastack-jetson:*` images |
-| `help`               | Show targets and resolved variable values                                      |
-| `test`               | Auto: Tier 1 always, Tier 2 if on a Jetson                                     |
-| `test-local`         | Tier 1 static checks (any host)                                                |
-| `test-jetson`        | Tier 2 integration tests (Jetson, post-`make build`)                           |
+| Target                   | Description                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `setup-host`             | One-time: nvidia Docker runtime + 16 GB swap (requires `sudo`)                 |
+| `build`                  | Full pipeline: resolve → checkout → onnxruntime → ML image                     |
+| `build-immich`           | Build ML image only (skips onnxruntime build; useful for iteration)            |
+| `build-onnxruntime`      | Build onnxruntime base image only; also tags cudastack intermediate (skips if exists) |
+| `up`                     | `docker compose up -d`                                                         |
+| `down`                   | `docker compose down`                                                          |
+| `clean`                  | Remove `src/` and the ML image (preserves onnxruntime image)                   |
+| `clean-all`              | `clean` + remove all `onnxruntime-jetson:*` and `onnxruntime-cudastack-jetson:*` images |
+| `help`                   | Show targets and resolved variable values                                      |
+| `test`                   | Auto: Tier 1 always, Tier 2 if on a Jetson                                     |
+| `test-local`             | Tier 1 static checks (any host)                                                |
+| `test-jetson`            | Tier 2 integration tests (Jetson, post-`make build`)                           |
 
 ### Configurable variables
 
@@ -198,7 +197,7 @@ To protect the ORT image from aggressive prune, create a sentinel container:
 docker create --name ort-pin onnxruntime-jetson:1.23.2-py311 true
 ```
 
-Only `onnxruntime-jetson:*` needs protecting. The cudastack image is trivially recreatable from the ORT image via `make ort-base` (seconds, no recompilation).
+Only `onnxruntime-jetson:*` needs protecting. The cudastack image is trivially recreatable from the ORT image via `make build-onnxruntime` (seconds, no recompilation).
 
 ## Run
 
@@ -243,7 +242,7 @@ Checks:
 | -------------------- | ------------------------------------------------------------------------- |
 | `test-makefile`      | `make -n build` works; `make help` resolves all variables to non-empty    |
 | `test-github-api`    | GitHub API returns a valid immich release tag (`vX.Y.Z`)                  |
-| `test-ort-detect`    | `make checkout detect-ort-version` extracts ORT version from pyproject    |
+| `test-onnxruntime-version` | `make checkout detect-onnxruntime-version` extracts ORT version from pyproject |
 | `test-compose`       | `docker compose config` parses `docker-compose.yaml`                      |
 | `test-dockerfile`    | `hadolint` clean (skipped if hadolint not installed)                      |
 | `test-env-example`   | Every `${VAR}` in compose has either a default or a row in `.env.example` |
@@ -258,12 +257,12 @@ make test-jetson
 
 Checks:
 
-| Subtarget       | Verifies                                                                     |
-| --------------- | ---------------------------------------------------------------------------- |
-| `test-ort-base` | ORT base image imports `onnxruntime` with `CUDAExecutionProvider` available  |
-| `test-venv-ort` | `/opt/venv/bin/python3` in the ML image imports ORT with CUDA                |
-| `test-service`  | `docker compose up`; logs show CUDA provider; `GET /ping` returns 200        |
-| `test-rebuild`  | Re-running `make ort-base` short-circuits on the cached image                |
+| Subtarget                  | Verifies                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `test-onnxruntime-base`    | ORT base image imports `onnxruntime` with `CUDAExecutionProvider` available  |
+| `test-onnxruntime-venv`    | `/opt/venv/bin/python3` in the ML image imports ORT with CUDA                |
+| `test-service`             | `docker compose up`; logs show CUDA provider; `GET /ping` returns 200        |
+| `test-rebuild`             | Re-running `make build-onnxruntime` short-circuits on the cached image       |
 
 ### Default `make test`
 

@@ -11,7 +11,7 @@ ort_image=$(make help 2>/dev/null | awk -F'=' '/^[[:space:]]*ORT_IMAGE[[:space:]
 [ -n "$ort_image" ] || fail "$TEST_NAME" "could not resolve ORT_IMAGE from make help"
 
 docker image inspect "$ort_image" >/dev/null 2>&1 \
-    || fail "$TEST_NAME" "image '$ort_image' not found locally — run 'make ort-base' first"
+    || fail "$TEST_NAME" "image '$ort_image' not found locally — run 'make build-onnxruntime' first"
 
 out=$(docker run --rm --runtime=nvidia "$ort_image" \
         python3 -c "import onnxruntime; print(onnxruntime.__version__); print(','.join(onnxruntime.get_available_providers()))" 2>&1) \

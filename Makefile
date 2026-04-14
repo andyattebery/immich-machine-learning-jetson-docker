@@ -31,7 +31,7 @@ CUDASTACK_IMAGE        ?= onnxruntime-cudastack-jetson:$(ONNXRUNTIME_VERSION)-py
 
 JETSON_CONTAINERS_REPO  ?= https://github.com/dusty-nv/jetson-containers
 JETSON_CONTAINERS_FLAGS  ?= --skip-tests all
-JETSON_CONTAINERS_DIR  ?= jetson-containers
+JETSON_CONTAINERS_DIR  ?= src/jetson-containers
 JETSON_VENV            := $(JETSON_CONTAINERS_DIR)/venv
 SWAP_FILE              ?= /mnt/16GB.swap
 SWAP_SIZE              ?= 16G
@@ -43,44 +43,26 @@ export PATH := $(CURDIR)/$(JETSON_CONTAINERS_DIR):$(PATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: build resolve-version checkout detect-ort-version ort-base image up down clean clean-all help \
-        setup-host jetson-venv \
+.PHONY: build resolve-version checkout detect-onnxruntime-version build-onnxruntime build-immich up down clean clean-all help \
+        setup-host \
         test test-local test-jetson \
-        test-makefile test-github-api test-ort-detect test-compose test-dockerfile test-env-example \
-        test-ort-base test-venv-ort test-service test-rebuild
+        test-makefile test-github-api test-onnxruntime-version test-compose test-dockerfile test-env-example \
+        test-onnxruntime-base test-onnxruntime-venv test-service test-rebuild
 
-$(JETSON_VENV)/.done:
-	@if [ ! -d $(JETSON_CONTAINERS_DIR)/.git ]; then \
-		echo "==> Cloning jetson-containers..."; \
-		git clone --depth 1 $(JETSON_CONTAINERS_REPO) $(JETSON_CONTAINERS_DIR); \
-	fi
-	@echo "==> Creating jetson-containers venv at $(JETSON_VENV) using $(PYTHON)..."
-	@if [ "$(PYTHON)" = "python3" ] && ! python3 -m venv --help >/dev/null 2>&1; then \
-		echo "==> Installing python3-venv (required for system Python venv creation)..."; \
-		sudo apt-get install -y python3-venv; \
-	fi
-	@$(PYTHON) -m venv $(JETSON_VENV)
-	@$(JETSON_VENV)/bin/pip install --upgrade pip --quiet
-	@$(JETSON_VENV)/bin/pip install -r $(JETSON_CONTAINERS_DIR)/requirements.txt
-	@touch $@
-
-jetson-venv: $(JETSON_VENV)/.done
-	@echo "==> jetson-containers venv ready at $(JETSON_VENV)"
 
 help:
 	@echo "Targets:"
-	@echo "  setup-host   - one-time Jetson host setup: nvidia Docker runtime + swap (requires sudo)"
-	@echo "  build        - full pipeline: checkout immich + build ORT base + build ML image"
-	@echo "  image        - build ML image only (skips ORT build; useful for iteration)"
-	@echo "  jetson-venv  - clone jetson-containers and set up its Python venv"
-	@echo "  ort-base     - build ORT base image only (skips if already exists)"
-	@echo "  up           - start the ML service via docker compose"
-	@echo "  down         - stop the ML service"
-	@echo "  clean        - remove src/, jetson-containers/, and the ML image (preserves ORT image)"
-	@echo "  clean-all    - clean + remove the ORT base image (full reset; ORT rebuild takes hours)"
-	@echo "  test         - auto: runs test-local (+ test-jetson if on Jetson)"
-	@echo "  test-local   - Tier 1 static checks (runs anywhere)"
-	@echo "  test-jetson  - Tier 2 integration tests (Jetson only; requires 'make build')"
+	@echo "  setup-host          - one-time Jetson host setup: nvidia Docker runtime + swap (requires sudo)"
+	@echo "  build               - full pipeline: checkout immich + build onnxruntime + build immich image"
+	@echo "  build-immich        - build Immich ML image only (skips onnxruntime build; useful for iteration)"
+	@echo "  build-onnxruntime   - build onnxruntime base image only (skips if already exists)"
+	@echo "  up                  - start the ML service via docker compose"
+	@echo "  down                - stop the ML service"
+	@echo "  clean               - remove src/ and the ML image (preserves onnxruntime image)"
+	@echo "  clean-all           - clean + remove onnxruntime images (full reset; rebuild takes hours)"
+	@echo "  test                - auto: runs test-local (+ test-jetson if on Jetson)"
+	@echo "  test-local          - Tier 1 static checks (runs anywhere)"
+	@echo "  test-jetson         - Tier 2 integration tests (Jetson only; requires 'make build')"
 	@echo ""
 	@echo "Variables:"
 	@echo "  IMMICH_VERSION      = $(IMMICH_VERSION) (resolved: $(RESOLVED_VERSION))"
@@ -165,7 +147,7 @@ checkout: resolve-version
 		git clone --depth 1 --branch $(RESOLVED_VERSION) $(IMMICH_REPO) $(IMMICH_SRC); \
 	fi
 
-detect-ort-version: checkout
+detect-onnxruntime-version: checkout
 	@DETECTED=$$(grep 'onnxruntime-gpu' $(IMMICH_SRC)/machine-learning/pyproject.toml \
 		| grep -oE '>=[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/>=//'); \
 	if [ -z "$$DETECTED" ]; then \
@@ -174,12 +156,27 @@ detect-ort-version: checkout
 	fi; \
 	echo "==> Detected onnxruntime-gpu >= $$DETECTED (will use: $(ONNXRUNTIME_VERSION))"
 
-ort-base: detect-ort-version jetson-venv
+build-onnxruntime: detect-onnxruntime-version
 	@if docker image inspect $(ORT_IMAGE) >/dev/null 2>&1; then \
-		echo "==> ORT base image '$(ORT_IMAGE)' already exists, skipping build"; \
+		echo "==> onnxruntime image '$(ORT_IMAGE)' already exists, skipping build"; \
 	else \
-		echo "==> No local ORT image '$(ORT_IMAGE)' found"; \
-		echo "==> Building ORT $(ONNXRUNTIME_VERSION) via jetson-containers..."; \
+		echo "==> No local onnxruntime image '$(ORT_IMAGE)' found"; \
+		if [ ! -f $(JETSON_VENV)/.done ]; then \
+			if [ ! -d $(JETSON_CONTAINERS_DIR)/.git ]; then \
+				echo "==> Cloning jetson-containers..."; \
+				git clone --depth 1 $(JETSON_CONTAINERS_REPO) $(JETSON_CONTAINERS_DIR); \
+			fi; \
+			echo "==> Creating jetson-containers venv at $(JETSON_VENV) using $(PYTHON)..."; \
+			if [ "$(PYTHON)" = "python3" ] && ! python3 -m venv --help >/dev/null 2>&1; then \
+				echo "==> Installing python3-venv (required for system Python venv creation)..."; \
+				sudo apt-get install -y python3-venv; \
+			fi; \
+			$(PYTHON) -m venv $(JETSON_VENV); \
+			$(JETSON_VENV)/bin/pip install --upgrade pip --quiet; \
+			$(JETSON_VENV)/bin/pip install -r $(JETSON_CONTAINERS_DIR)/requirements.txt; \
+			touch $(JETSON_VENV)/.done; \
+		fi; \
+		echo "==> Building onnxruntime $(ONNXRUNTIME_VERSION) via jetson-containers..."; \
 		echo "    (This may take a long time on first build)"; \
 		jetson-containers build python:$(ORT_PYTHON_VERSION) onnxruntime:$(ONNXRUNTIME_VERSION) $(JETSON_CONTAINERS_FLAGS); \
 		echo "==> Locating built image..."; \
@@ -189,8 +186,8 @@ ort-base: detect-ort-version jetson-venv
 			| head -1); \
 		if [ -z "$$BUILT_TAG" ]; then \
 			echo "ERROR: Could not find final onnxruntime image (expected tag suffix: -onnxruntime_$(ONNXRUNTIME_VERSION))"; \
-			echo "       The ORT source compilation likely failed or was killed (OOM)."; \
-			echo "       Tip: add swap space before retrying (see jetson.spec.md)."; \
+			echo "       The onnxruntime source compilation likely failed or was killed (OOM)."; \
+			echo "       Tip: add swap space before retrying (see README.md)."; \
 			echo "       Run 'docker images | grep onnxruntime' to inspect, or set ORT_IMAGE manually."; \
 			exit 1; \
 		fi; \
@@ -213,7 +210,7 @@ ort-base: detect-ort-version jetson-venv
 		echo "==> Tagged prod base as $(CUDASTACK_IMAGE)"; \
 	fi
 
-image: ort-base
+build-immich: build-onnxruntime
 	@echo "==> Building Immich ML image $(ML_IMAGE)..."
 	docker build \
 		-f Dockerfile.jetson \
@@ -224,7 +221,7 @@ image: ort-base
 		$(IMMICH_SRC)/machine-learning/
 	@echo "==> Built $(ML_IMAGE)"
 
-build: image
+build: build-immich
 
 up:
 	docker compose up -d
@@ -234,7 +231,7 @@ down:
 
 clean:
 	-docker rmi $(ML_IMAGE) 2>/dev/null
-	-rm -rf src/ $(JETSON_CONTAINERS_DIR)
+	-rm -rf src/
 
 # Removes everything including all ORT base images. Use when you need a true fresh start.
 # Warning: the ORT image takes 1-2 hours to rebuild from source.
@@ -246,25 +243,25 @@ clean-all: clean
 
 # -------- Tests --------
 # Tier 1: runs anywhere, no Jetson required.
-test-local: test-makefile test-github-api test-ort-detect \
+test-local: test-makefile test-github-api test-onnxruntime-version \
             test-compose test-dockerfile test-env-example
 	@echo "==> Tier 1 (local) tests passed"
 
-test-makefile:     ; @scripts/test_makefile.sh
-test-github-api:   ; @scripts/test_github_api.sh
-test-ort-detect:   ; @scripts/test_ort_detect.sh
-test-compose:      ; @scripts/test_compose.sh
-test-dockerfile:   ; @scripts/test_dockerfile.sh
-test-env-example:  ; @scripts/test_env_example.sh
+test-makefile:            ; @scripts/test_makefile.sh
+test-github-api:          ; @scripts/test_github_api.sh
+test-onnxruntime-version: ; @scripts/test_ort_detect.sh
+test-compose:             ; @scripts/test_compose.sh
+test-dockerfile:          ; @scripts/test_dockerfile.sh
+test-env-example:         ; @scripts/test_env_example.sh
 
 # Tier 2: requires Jetson + completed `make build`.
-test-jetson: test-ort-base test-venv-ort test-service test-rebuild
+test-jetson: test-onnxruntime-base test-onnxruntime-venv test-service test-rebuild
 	@echo "==> Tier 2 (Jetson integration) tests passed"
 
-test-ort-base:     ; @scripts/test_ort_base.sh
-test-venv-ort:     ; @scripts/test_venv_ort.sh
-test-service:      ; @scripts/test_service_up.sh
-test-rebuild:      ; @scripts/test_rebuild.sh
+test-onnxruntime-base: ; @scripts/test_ort_base.sh
+test-onnxruntime-venv: ; @scripts/test_venv_ort.sh
+test-service:          ; @scripts/test_service_up.sh
+test-rebuild:          ; @scripts/test_rebuild.sh
 
 # Default: auto-detect Jetson and run the appropriate tier(s).
 test:
