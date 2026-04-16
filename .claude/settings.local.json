@@ -30,7 +30,8 @@
       "Bash(docker history:*)",
       "Bash(make build-immich:*)",
       "Bash(docker container:*)",
-      "Bash(docker image:*)"
+      "Bash(docker image:*)",
+      "Bash(make test-local *)"
     ]
   }
 }
