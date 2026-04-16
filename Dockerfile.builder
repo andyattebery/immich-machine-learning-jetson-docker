@@ -1,0 +1,37 @@
+# Dockerfile.builder — builder stage template only.
+# The prod stage is generated from the upstream immich Dockerfile by
+# scripts/generate_dockerfile.py and appended to produce Dockerfile.generated.
+#
+# Do not build directly. Use the Makefile:
+#   make build              # uses latest immich release
+#   make build IMMICH_VERSION=v2.7.4
+
+ARG ONNXRUNTIME_BASE_IMAGE
+ARG PROD_BASE_IMAGE
+FROM ${ONNXRUNTIME_BASE_IMAGE} AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv
+
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.8.15@sha256:a5727064a0de127bdb7c9d3c1383f3a9ac307d9f2d8a391edc7896c54289ced0 /uv /uvx /bin/
+
+# Ensure /opt/venv is Python 3.11. The jetson-containers base may have built it against
+# Python 3.10 (Ubuntu 22.04 default); recreating it here guarantees the correct ABI.
+RUN python3.11 -m venv --clear /opt/venv
+
+# Install immich's Python dependencies into /opt/venv.
+# We skip the onnxruntime extras — uv sync may remove ORT since it's not in this
+# resolution, but we reinstall it from the wheel left by the jetson-containers build.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --no-dev --no-editable --no-install-project --compile-bytecode --no-progress --active --link-mode copy
+
+# Reinstall the Jetson-compiled ORT wheel. The jetson-containers build leaves it at
+# /opt/onnxruntime_gpu*.whl; this survives uv sync and guarantees the Jetson GPU
+# build is what ends up in the venv, not a PyPI wheel.
+RUN uv pip install /opt/onnxruntime*.whl

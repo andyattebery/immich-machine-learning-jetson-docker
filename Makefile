@@ -43,7 +43,8 @@ export PATH := $(CURDIR)/$(JETSON_CONTAINERS_DIR):$(PATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: build resolve-version checkout detect-onnxruntime-version build-onnxruntime build-immich up down clean clean-all help \
+.PHONY: build resolve-version checkout detect-onnxruntime-version build-onnxruntime build-immich generate-dockerfile \
+        up down clean clean-all help \
         setup-host \
         test test-local test-jetson \
         test-makefile test-github-api test-onnxruntime-version test-compose test-dockerfile test-env-example \
@@ -56,6 +57,7 @@ help:
 	@echo "  build               - full pipeline: checkout immich + build onnxruntime + build immich image"
 	@echo "  build-immich        - build Immich ML image only (skips onnxruntime build; useful for iteration)"
 	@echo "  build-onnxruntime   - build onnxruntime base image only (skips if already exists)"
+	@echo "  generate-dockerfile - generate Dockerfile.generated from upstream immich prod stage"
 	@echo "  up                  - start the ML service via docker compose"
 	@echo "  down                - stop the ML service"
 	@echo "  clean               - remove src/ and the ML image (preserves onnxruntime image)"
@@ -210,16 +212,31 @@ build-onnxruntime: detect-onnxruntime-version
 		echo "==> Tagged prod base as $(CUDASTACK_IMAGE)"; \
 	fi
 
-build-immich: build-onnxruntime
-	@echo "==> Building Immich ML image $(ML_IMAGE)..."
-	docker build \
-		-f Dockerfile.jetson \
-		--build-arg ONNXRUNTIME_BASE_IMAGE=$(ORT_IMAGE) \
-		--build-arg PROD_BASE_IMAGE=$(CUDASTACK_IMAGE) \
-		--build-arg BUILD_SOURCE_REF=$(RESOLVED_VERSION) \
-		-t $(ML_IMAGE) \
-		$(IMMICH_SRC)/machine-learning/
-	@echo "==> Built $(ML_IMAGE)"
+generate-dockerfile: checkout
+	@echo "==> Generating Dockerfile.generated from upstream prod stage..."
+	$(PYTHON) scripts/generate_dockerfile.py \
+		--builder Dockerfile.builder \
+		--upstream $(IMMICH_SRC)/machine-learning/Dockerfile \
+		--version $(RESOLVED_VERSION) \
+		--output Dockerfile.generated
+
+build-immich: generate-dockerfile build-onnxruntime
+	@CURRENT=$$(docker inspect $(ML_IMAGE) \
+		--format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+		| awk -F= '/^IMMICH_SOURCE_REF=/{print $$2}'); \
+	if [ "$$CURRENT" = "$(RESOLVED_VERSION)" ]; then \
+		echo "==> ML image already at $(RESOLVED_VERSION), skipping build"; \
+	else \
+		echo "==> Building Immich ML image $(ML_IMAGE)..."; \
+		docker build \
+			-f Dockerfile.generated \
+			--build-arg ONNXRUNTIME_BASE_IMAGE=$(ORT_IMAGE) \
+			--build-arg PROD_BASE_IMAGE=$(CUDASTACK_IMAGE) \
+			--build-arg BUILD_SOURCE_REF=$(RESOLVED_VERSION) \
+			-t $(ML_IMAGE) \
+			$(IMMICH_SRC)/machine-learning/ && \
+		echo "==> Built $(ML_IMAGE)"; \
+	fi
 
 build: build-immich
 

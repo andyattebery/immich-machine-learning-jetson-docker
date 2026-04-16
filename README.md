@@ -27,7 +27,7 @@ Jetson requires a separate build because:
 ```
 immich-machine-learning-jetson-docker/
 ├── Makefile              # orchestrates checkout, ORT build, ML image build
-├── Dockerfile.jetson     # multi-stage ML image build
+├── Dockerfile.builder     # multi-stage ML image build
 ├── docker-compose.yaml   # runs the ML service
 ├── .env.example          # example environment variables
 ├── .gitignore
@@ -59,7 +59,7 @@ immich-machine-learning-jetson-docker/
 │     tags cudastack intermediate as                       │
 │       onnxruntime-cudastack-jetson:VERSION-py311         │
 │                                                          │
-│  6. docker build -f Dockerfile.jetson                    │
+│  6. docker build -f Dockerfile.builder                    │
 │     ┌─────────────────────────────────────────────────┐  │
 │     │  builder stage                                  │  │
 │     │  base: onnxruntime-jetson:VERSION-py311         │  │
