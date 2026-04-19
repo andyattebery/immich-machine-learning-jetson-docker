@@ -1,6 +1,6 @@
-# Dockerfile.builder — builder stage template only.
+# Dockerfile.immich-builder — builder stage template only.
 # The prod stage is generated from the upstream immich Dockerfile by
-# scripts/generate_dockerfile.py and appended to produce Dockerfile.generated.
+# scripts/generate_dockerfile.py and appended to produce Dockerfile.immich-generated.
 #
 # Do not build directly. Use the Makefile:
 #   make build              # uses latest immich release

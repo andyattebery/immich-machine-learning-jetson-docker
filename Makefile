@@ -5,11 +5,11 @@
 #   make build IMMICH_VERSION=v2.7.4    # pin a specific version
 #   make up                              # start the service
 #   make down                            # stop the service
-#   make clean                           # remove src/, jetson-containers/, and the ML image
+#   make clean                           # remove vendor/, jetson-containers/, and the ML image
 
 IMMICH_VERSION      ?= latest
 IMMICH_REPO         ?= https://github.com/immich-app/immich.git
-IMMICH_SRC          ?= src/immich
+IMMICH_SRC          ?= vendor/immich
 ML_IMAGE            ?= immich-machine-learning:jetson
 
 # Resolve "latest" to actual tag via GitHub API (no gh CLI needed)
@@ -31,7 +31,7 @@ CUDASTACK_IMAGE        ?= onnxruntime-cudastack-jetson:$(ONNXRUNTIME_VERSION)-py
 
 JETSON_CONTAINERS_REPO  ?= https://github.com/dusty-nv/jetson-containers
 JETSON_CONTAINERS_FLAGS  ?= --skip-tests all
-JETSON_CONTAINERS_DIR  ?= src/jetson-containers
+JETSON_CONTAINERS_DIR  ?= vendor/jetson-containers
 JETSON_VENV            := $(JETSON_CONTAINERS_DIR)/venv
 SWAP_FILE              ?= /mnt/16GB.swap
 SWAP_SIZE              ?= 16G
@@ -43,7 +43,8 @@ export PATH := $(CURDIR)/$(JETSON_CONTAINERS_DIR):$(PATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: build resolve-version checkout detect-onnxruntime-version build-onnxruntime build-immich generate-dockerfile \
+.PHONY: build resolve-version checkout detect-onnxruntime-version update-jetson-containers \
+        build-onnxruntime build-immich build-wyoming build-wyoming-whisper build-wyoming-piper generate-dockerfile \
         up down clean clean-all help \
         setup-host \
         test test-local test-jetson \
@@ -57,10 +58,13 @@ help:
 	@echo "  build               - full pipeline: checkout immich + build onnxruntime + build immich image"
 	@echo "  build-immich        - build Immich ML image only (skips onnxruntime build; useful for iteration)"
 	@echo "  build-onnxruntime   - build onnxruntime base image only (skips if already exists)"
-	@echo "  generate-dockerfile - generate Dockerfile.generated from upstream immich prod stage"
+	@echo "  build-wyoming PKG=<name> - pull latest jetson-containers and build wyoming-<name> on top of ORT_IMAGE (e.g. PKG=whisper, PKG=piper)"
+	@echo "  build-wyoming-whisper - shortcut for 'build-wyoming PKG=whisper'"
+	@echo "  build-wyoming-piper   - shortcut for 'build-wyoming PKG=piper'"
+	@echo "  generate-dockerfile - generate Dockerfile.immich-generated from upstream immich prod stage"
 	@echo "  up                  - start the ML service via docker compose"
 	@echo "  down                - stop the ML service"
-	@echo "  clean               - remove src/ and the ML image (preserves onnxruntime image)"
+	@echo "  clean               - remove vendor/ and the ML image (preserves onnxruntime image)"
 	@echo "  clean-all           - clean + remove onnxruntime images (full reset; rebuild takes hours)"
 	@echo "  test                - auto: runs test-local (+ test-jetson if on Jetson)"
 	@echo "  test-local          - Tier 1 static checks (runs anywhere)"
@@ -134,6 +138,18 @@ resolve-version:
 	fi
 	@echo "==> Immich version: $(RESOLVED_VERSION)"
 
+# Ensures vendor/jetson-containers exists and is at upstream master's HEAD.
+# Any target that invokes `jetson-containers build` should depend on this.
+update-jetson-containers:
+	@if [ ! -d $(JETSON_CONTAINERS_DIR)/.git ]; then \
+		echo "==> Cloning jetson-containers..."; \
+		git clone --depth 1 $(JETSON_CONTAINERS_REPO) $(JETSON_CONTAINERS_DIR); \
+	else \
+		echo "==> Refreshing $(JETSON_CONTAINERS_DIR) to latest upstream master..."; \
+		git -C $(JETSON_CONTAINERS_DIR) fetch --unshallow 2>/dev/null || true; \
+		git -C $(JETSON_CONTAINERS_DIR) pull --ff-only origin master; \
+	fi
+
 checkout: resolve-version
 	@if [ -d $(IMMICH_SRC)/.git ]; then \
 		CURRENT=$$(cd $(IMMICH_SRC) && git describe --tags --exact-match 2>/dev/null || echo ""); \
@@ -158,16 +174,12 @@ detect-onnxruntime-version: checkout
 	fi; \
 	echo "==> Detected onnxruntime-gpu >= $$DETECTED (will use: $(ONNXRUNTIME_VERSION))"
 
-build-onnxruntime: detect-onnxruntime-version
+build-onnxruntime: detect-onnxruntime-version update-jetson-containers
 	@if docker image inspect $(ORT_IMAGE) >/dev/null 2>&1; then \
 		echo "==> onnxruntime image '$(ORT_IMAGE)' already exists, skipping build"; \
 	else \
 		echo "==> No local onnxruntime image '$(ORT_IMAGE)' found"; \
 		if [ ! -f $(JETSON_VENV)/.done ]; then \
-			if [ ! -d $(JETSON_CONTAINERS_DIR)/.git ]; then \
-				echo "==> Cloning jetson-containers..."; \
-				git clone --depth 1 $(JETSON_CONTAINERS_REPO) $(JETSON_CONTAINERS_DIR); \
-			fi; \
 			echo "==> Creating jetson-containers venv at $(JETSON_VENV) using $(PYTHON)..."; \
 			if [ "$(PYTHON)" = "python3" ] && ! python3 -m venv --help >/dev/null 2>&1; then \
 				echo "==> Installing python3-venv (required for system Python venv creation)..."; \
@@ -213,12 +225,12 @@ build-onnxruntime: detect-onnxruntime-version
 	fi
 
 generate-dockerfile: checkout
-	@echo "==> Generating Dockerfile.generated from upstream prod stage..."
+	@echo "==> Generating Dockerfile.immich-generated from upstream prod stage..."
 	$(PYTHON) scripts/generate_dockerfile.py \
-		--builder Dockerfile.builder \
+		--builder Dockerfile.immich-builder \
 		--upstream $(IMMICH_SRC)/machine-learning/Dockerfile \
 		--version $(RESOLVED_VERSION) \
-		--output Dockerfile.generated
+		--output Dockerfile.immich-generated
 
 build-immich: generate-dockerfile build-onnxruntime
 	@CURRENT=$$(docker inspect $(ML_IMAGE) \
@@ -229,7 +241,7 @@ build-immich: generate-dockerfile build-onnxruntime
 	else \
 		echo "==> Building Immich ML image $(ML_IMAGE)..."; \
 		docker build \
-			-f Dockerfile.generated \
+			-f Dockerfile.immich-generated \
 			--build-arg ONNXRUNTIME_BASE_IMAGE=$(ORT_IMAGE) \
 			--build-arg PROD_BASE_IMAGE=$(CUDASTACK_IMAGE) \
 			--build-arg BUILD_SOURCE_REF=$(RESOLVED_VERSION) \
@@ -240,6 +252,75 @@ build-immich: generate-dockerfile build-onnxruntime
 
 build: build-immich
 
+# Pull the latest jetson-containers and build a wyoming-* package on top of $(ORT_IMAGE).
+# Usage: make build-wyoming PKG=whisper   (or PKG=piper, etc.)
+# The version baked into the resulting image tag is whatever upstream's
+# packages/smart-home/wyoming/wyoming-$(PKG)/config.py registers as default.
+build-wyoming: build-onnxruntime update-jetson-containers
+	@if [ -z "$(PKG)" ]; then \
+		echo "ERROR: PKG is required. Usage: make build-wyoming PKG=whisper|piper"; \
+		exit 1; \
+	fi
+	@CONFIG=$(JETSON_CONTAINERS_DIR)/packages/smart-home/wyoming/wyoming-$(PKG)/config.py; \
+	if [ ! -f "$$CONFIG" ]; then \
+		echo "ERROR: No such package: wyoming-$(PKG) (expected $$CONFIG)"; \
+		exit 1; \
+	fi; \
+	PKG_VERSION=$$(grep -oE 'create_package\("[0-9.]+", *default=True' "$$CONFIG" \
+		| grep -oE '[0-9.]+' | head -1); \
+	if [ -z "$$PKG_VERSION" ]; then \
+		echo "ERROR: Could not detect default wyoming-$(PKG) version from config.py"; \
+		exit 1; \
+	fi; \
+	echo "==> Detected upstream wyoming-$(PKG) version: $$PKG_VERSION"; \
+	PKG_UPPER=$$(echo $(PKG) | tr '[:lower:]' '[:upper:]'); \
+	STABLE_TAG=$$(docker images --format '{{.Repository}}:{{.Tag}}' \
+		| grep -E "^wyoming-$(PKG):r[0-9]" \
+		| awk '{ print length($$0), $$0 }' | sort -n | head -1 | cut -d' ' -f2-); \
+	BUILT_VERSION=""; \
+	if [ -n "$$STABLE_TAG" ]; then \
+		BUILT_VERSION=$$(docker history --no-trunc "$$STABLE_TAG" 2>/dev/null \
+			| grep -oE "WYOMING_$${PKG_UPPER}_VERSION=[0-9.]+" | head -1 | cut -d= -f2); \
+	fi; \
+	if [ -n "$$STABLE_TAG" ] && [ "$$BUILT_VERSION" = "$$PKG_VERSION" ]; then \
+		echo "==> $$STABLE_TAG already at version $$BUILT_VERSION, skipping"; \
+	else \
+		if [ -n "$$STABLE_TAG" ]; then \
+			echo "==> Existing $$STABLE_TAG is at $${BUILT_VERSION:-unknown}; rebuilding for $$PKG_VERSION"; \
+		fi; \
+		echo "==> Building wyoming-$(PKG) $$PKG_VERSION on top of $(ORT_IMAGE)..."; \
+		jetson-containers build \
+			--base $(ORT_IMAGE) \
+			--skip-packages "cuda*,cudastack*,python,numpy,onnxruntime" \
+			--skip-tests all \
+			wyoming-$(PKG); \
+	fi
+	@echo "==> wyoming-$(PKG) images:"
+	@docker images --format '{{.Repository}}:{{.Tag}}' | grep '^wyoming-$(PKG):' | head -3
+	@# Patch in `zeroconf` — required by the --zeroconf flag baked into upstream's
+	@# whisper run script but missing from upstream's install.sh.
+	@# See https://github.com/dusty-nv/jetson-containers/issues/1524
+	@if [ "$(PKG)" = "whisper" ]; then \
+		TARGET_TAG=$$(docker images --format '{{.Repository}}:{{.Tag}}' \
+			| grep -E "^wyoming-$(PKG):r[0-9]" \
+			| awk '{ print length($$0), $$0 }' | sort -n | head -1 | cut -d' ' -f2-); \
+		if [ -z "$$TARGET_TAG" ]; then \
+			echo "ERROR: no wyoming-$(PKG) tag to patch"; exit 1; \
+		fi; \
+		echo "==> Layering zeroconf onto $$TARGET_TAG"; \
+		docker build \
+			-f Dockerfile.wyoming-whisper-zeroconf \
+			--build-arg BASE_IMAGE="$$TARGET_TAG" \
+			-t "$$TARGET_TAG" .; \
+	fi
+
+# Convenience wrappers for the two wyoming packages we currently support.
+build-wyoming-whisper:
+	@$(MAKE) build-wyoming PKG=whisper
+
+build-wyoming-piper:
+	@$(MAKE) build-wyoming PKG=piper
+
 up:
 	docker compose up -d
 
@@ -248,12 +329,12 @@ down:
 
 clean:
 	-docker rmi $(ML_IMAGE) 2>/dev/null
-	-rm -rf src/
+	-rm -rf vendor/
 
 # Removes everything including all ORT base images. Use when you need a true fresh start.
 # Warning: the ORT image takes 1-2 hours to rebuild from source.
 # Matches by prefix (onnxruntime-jetson:*) so it works even when ONNXRUNTIME_VERSION
-# is empty (e.g. after clean has already removed src/).
+# is empty (e.g. after clean has already removed vendor/).
 clean-all: clean
 	-docker images --format '{{.Repository}}:{{.Tag}}' \
 		| grep -E '^onnxruntime-(jetson|cudastack-jetson):' | xargs -r docker rmi 2>/dev/null || true

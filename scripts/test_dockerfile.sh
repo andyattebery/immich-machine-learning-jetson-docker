@@ -8,7 +8,7 @@ if ! command -v hadolint >/dev/null 2>&1; then
     skip "$TEST_NAME" "hadolint not installed"
 fi
 
-hadolint --failure-threshold error Dockerfile.builder \
+hadolint --failure-threshold error Dockerfile.immich-builder \
     || fail "$TEST_NAME" "hadolint reported errors"
 
 pass "$TEST_NAME"

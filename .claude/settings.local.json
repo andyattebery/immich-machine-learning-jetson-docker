@@ -31,7 +31,17 @@
       "Bash(make build-immich:*)",
       "Bash(docker container:*)",
       "Bash(docker image:*)",
-      "Bash(make test-local *)"
+      "Bash(make test-local *)",
+      "Bash(make -n build-wyoming-whisper)",
+      "Bash(make -n build-onnxruntime)",
+      "Bash(docker manifest *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(m['platform'].get\\('architecture'\\), m['platform'].get\\('os'\\), m['digest'], m.get\\('size'\\)\\) for m in d.get\\('manifests',[d]\\)]\")",
+      "Bash(curl -s \"https://auth.docker.io/token?service=registry.docker.io&scope=repository:rhasspy/wyoming-whisper:pull\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); layers=d.get\\('layers',[]\\); total=sum\\(l['size'] for l in layers\\); print\\(f'Total compressed: {total/1e6:.1f} MB across {len\\(layers\\)} layers'\\); print\\('Config digest:', d['config']['digest']\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s \"https://hub.docker.com/v2/repositories/dustynv/wyoming-whisper/tags/?page_size=25&ordering=last_updated\")",
+      "Bash(curl -s \"https://auth.docker.io/token?service=registry.docker.io&scope=repository:dustynv/wyoming-whisper:pull\")",
+      "Bash(git -C src/jetson-containers show ebc826a6 -- packages/smart-home/wyoming/wyoming-whisper/build.sh packages/smart-home/wyoming/wyoming-whisper/rootfs/etc/s6-overlay/s6-rc.d/whisper/run)"
     ]
   }
 }

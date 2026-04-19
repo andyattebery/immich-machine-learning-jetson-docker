@@ -1,0 +1,8 @@
+# Workaround for jetson-containers bug where wyoming-whisper's install.sh
+# omits `zeroconf` (wyoming's --zeroconf flag needs it at runtime).
+# Upstream tracking: https://github.com/dusty-nv/jetson-containers/issues/1524
+# Remove this file once upstream merges the fix into install.sh.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+RUN uv pip install zeroconf \
+    && python3 -c 'import zeroconf; print("zeroconf", zeroconf.__version__)'
